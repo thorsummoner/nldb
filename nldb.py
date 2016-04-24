@@ -3,6 +3,16 @@ import collections
 import os
 import sqlite3
 
+class Video(object):
+    def __init__(self, youtube_id):
+        super(Video, self).__init__()
+        self.youtube_id = youtube_id
+
+    @property
+    def youtube_url(self):
+        return 'https://www.youtube.com/watch?v=' + self.youtube_id
+
+
 class NlDatabase(object):
     DATABASE_FILE = './nl.db'
     SCHEEMA = {
@@ -18,6 +28,12 @@ class NlDatabase(object):
             ('enjoyment_score', 'NUMERIC'),
             ('insanity_score',  'NUMERIC'),
             ('power_score',     'NUMERIC'),
+        ]),
+        'videos_caption': collections.OrderedDict([
+            ('youtube_id',      'TEXT PRIMARY KEY'),
+            ('nocaption',       'BOOL'),
+            ('ttml',            'TEXT'),
+            ('plaintext',       'TEXT'),
         ]),
     }
 
@@ -54,3 +70,21 @@ class NlDatabase(object):
     def init_scheema_once(self):
         if not os.path.isfile(self.DATABASE_FILE):
             self.init_scheema()
+
+
+    def insert_dict(self, table, data):
+        with self as cursor:
+            cursor.execute(
+                (
+                    'INSERT OR REPLACE '
+                    'INTO `{table}` ({columns}) '
+                    'VALUES ({values}) '
+                ).format(
+                    table=table,
+                    columns=', '.join([
+                        '`{}`'.format(key) for key in data.keys()
+                    ]),
+                    values=', '.join(['?'] * len(data)),
+                ),
+                data.values()
+            )

@@ -34,7 +34,6 @@ def gen_data():
 
         video['youtube_id'] = data_item_html.find('button', {'class': 'addinfo_button'}).attrs['value']
         assert(video['youtube_id'])
-        # video['youtube_url'] = 'https://www.youtube.com/watch?v=' + video['youtube_id']
 
         video['title'] = cells[0].text
         assert(video['title'])
@@ -70,38 +69,14 @@ def main():
     database = nldb.NlDatabase(auto_commit=True)
     database.init_scheema_once()
 
-    with database as cursor:
-        for video in gen_data():
-            videos_nl = video['nl']
-            videos_nl['youtube_id'] = video['youtube_id']
-            del video['nl']
+    for video in gen_data():
+        videos_nl = video['nl']
+        videos_nl['youtube_id'] = video['youtube_id']
+        del video['nl']
 
-            cursor.execute(
-                (
-                    'INSERT OR REPLACE '
-                    'INTO `videos` ({columns}) '
-                    'VALUES ({values}) '
-                ).format(
-                    columns=', '.join([
-                        '`{}`'.format(key) for key in video.keys()
-                    ]),
-                    values=', '.join(['?'] * len(video)),
-                ),
-                video.values()
-            )
-            cursor.execute(
-                (
-                    'INSERT OR REPLACE '
-                    'INTO `videos_nl` ({columns}) '
-                    'VALUES ({values}) '
-                ).format(
-                    columns=', '.join([
-                        '`{}`'.format(key) for key in videos_nl.keys()
-                    ]),
-                    values=', '.join(['?'] * len(videos_nl)),
-                ),
-                videos_nl.values()
-            )
+        database.insert_dict('videos', video)
+        database.insert_dict('videos_nl', videos_nl)
+
 
             # import pdb; pdb.set_trace()
 

@@ -1,0 +1,134 @@
+#!/usr/bin/env python
+from __future__ import unicode_literals
+from __future__ import with_statement
+
+import io
+import logging
+import multiprocessing
+import StringIO
+import sys
+import xml.etree.cElementTree
+
+import nldb
+
+import youtube_dl
+
+THREADS = 1
+GLOBALLOCK = multiprocessing.Lock()
+
+global_iostream = []
+
+class YdlSubIntercept(object):
+    def __init__(self):
+        super(YdlSubIntercept, self).__init__()
+        self.buf = StringIO.StringIO()
+
+    def __enter__(self):
+        return self.buf
+
+    def __exit__(self, *_):
+        pass
+
+    def write(self, data):
+        self.buf.write(data)
+
+logging.basicConfig(
+    format='[populate_cc] [%(levelname)s] %(message)s',
+    level=logging.DEBUG
+)
+
+io.__open__ = io.open
+def io_open(*args, **kwargs):
+    if args[0].endswith('.ttml'):
+        logging.warn((
+            'Intercepted dest file `{}` with '
+            'StringIO Buffer at `global_iostream`'
+        ).format(args[0]))
+        return global_iostream[0]
+    return io.__open__(*args, **kwargs)
+
+io.open = io_open
+
+def main():
+
+    ydl_opts = {
+        'skip_download': True,
+        'subtitleslangs': ['en'],
+        'writeautomaticsub': True,
+        'subtitlesformat': 'ttml',  # vtt, ttml
+    }
+
+    database = nldb.NlDatabase(auto_commit=True)
+
+    videos = None
+    with database as cursor:
+        already_cc = [i[0] for i in cursor.execute(
+            'SELECT youtube_id FROM videos_caption'
+        )]
+        func_args = [
+            (ydl_opts, database, nldb.Video(i[0]))
+            for i in cursor.execute((
+                'SELECT youtube_id FROM videos '
+                'ORDER BY release_date_ISO8601 DESC '
+            )) if i[0] not in already_cc
+        ]
+    assert(func_args is not None)
+
+    pool = multiprocessing.Pool(THREADS)
+    try:
+        # Spawn up to 9999999 jobs, I think this is the maximum possible.
+        # I do not know what happens if you exceed this.
+        pool.map_async(get_caption_data, func_args).get(9999999)
+    except KeyboardInterrupt:
+        # Allow ^C to interrupt from any thread.
+        sys.stdout.write('\033[0m')
+        sys.stdout.write('User Interupt\n')
+    pool.close()
+
+def get_caption_data(args):
+    ydl_opts, database, video = args
+    logging.info(video.youtube_url)
+
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl_cc:
+
+        assert(0 == len(global_iostream))
+        global_iostream.insert(0, YdlSubIntercept())
+        assert(1 == len(global_iostream))
+        ydl_cc.download([video.youtube_url])
+        assert(1 == len(global_iostream))
+        sub_intercept = global_iostream.pop()
+        assert(0 == len(global_iostream))
+
+        if 0 == sub_intercept.buf.len:
+            del sub_intercept
+            with database as cursor:
+                cursor.execute(
+                    (
+                        'INSERT INTO `videos_caption` '
+                        '(`youtube_id`, `nocaption`) '
+                        'VALUES(?, ?) '
+                    ),
+                    (video.youtube_id, True),
+                )
+            return
+
+        sub_intercept.buf.seek(0)
+        root = xml.etree.cElementTree.fromstring(sub_intercept.buf.read().encode('ascii', 'ignore'))
+        sub_plain = '\n'.join(
+            [', '.join([j for j in i.itertext()]) + '. ' for i in root[1][0]]
+        )
+
+        sub_intercept.buf.seek(0)
+        videos_caption = {
+            'youtube_id': video.youtube_id,
+            'ttml':       sub_intercept.buf.read(),
+            'plaintext':  sub_plain,
+        }
+        del sub_intercept
+
+        database.insert_dict('videos_caption', videos_caption)
+
+
+if __name__ == '__main__':
+    main()
+    # youtube-dl --all-subs --skip-download
