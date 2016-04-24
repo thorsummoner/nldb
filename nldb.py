@@ -35,6 +35,10 @@ class NlDatabase(object):
             ('ttml',            'TEXT'),
             ('plaintext',       'TEXT'),
         ]),
+        'word_rank': collections.OrderedDict([
+            ('word',            'TEXT PRIMARY KEY'),
+            ('occurances',      'NUMERIC'),
+        ]),
     }
 
     def __init__(self, auto_commit=False):

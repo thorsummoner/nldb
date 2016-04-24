@@ -60,7 +60,6 @@ def main():
 
     database = nldb.NlDatabase(auto_commit=True)
 
-    videos = None
     with database as cursor:
         already_cc = [i[0] for i in cursor.execute(
             'SELECT youtube_id FROM videos_caption'
