@@ -1,0 +1,109 @@
+#!/usr/bin/env python
+
+import datetime
+import re
+import urllib2
+
+import nldb
+
+import bs4
+
+DATA_UPSTREAM = (
+    'http://www.northernlion-db.com/elemente/video_datenquelle.php'
+    '?order=published+DESC&fulltext=+&page=1&anzahl=all'
+)
+
+RE_RUNTIME = re.compile(r'((?P<hours>\d+?) hours)?((?P<minutes>\d+?) minutes)?')
+
+def get_html():
+    return urllib2.urlopen(DATA_UPSTREAM).read()
+
+def gen_data():
+    # extract the data items as html
+    data_items_html = bs4.BeautifulSoup(get_html(), 'lxml') \
+        .find("table", {'id': 'video_table'}).findAll('tr')
+
+    for data_item_html in data_items_html:
+        # skip header
+        if 'th' == next(data_item_html.children).name:
+            continue
+
+        cells = data_item_html.find_all('td')
+
+        video = dict()
+
+        video['youtube_id'] = data_item_html.find('button', {'class': 'addinfo_button'}).attrs['value']
+        assert(video['youtube_id'])
+        # video['youtube_url'] = 'https://www.youtube.com/watch?v=' + video['youtube_id']
+
+        video['title'] = cells[0].text
+        assert(video['title'])
+
+        # video['runtime_human_readable'] = cells[1].text
+        # assert(video['runtime_human_readable'])
+
+        video['runtime_seconds'] = datetime.timedelta(**{
+            k: int(v) for k, v in
+            RE_RUNTIME.match(cells[1].text).groupdict().iteritems() if v
+        }).seconds
+        assert(video['runtime_seconds'])
+
+        assert('releasedate' in cells[2].attrs['class'])
+        video['release_date_ISO8601'] = cells[2].text
+        assert(video['release_date_ISO8601'])
+        # video['release_date_python'] = datetime.datetime.strptime(cells[2].text, '%Y-%m-%d %H:%M:%S')
+        # assert(video['release_date_python'])
+
+        video['thumbnail_url'] = cells[3].find_all('a')[1].attrs['href']
+        assert(video['thumbnail_url'])
+
+        video['nl'] = dict()
+        video['nl']['enjoyment_score'] = (cells[5].text.rstrip('%') if '-' != cells[5].text else None)
+        video['nl']['power_score'] = (cells[6].text.rstrip('%') if '-' != cells[6].text else None)
+        video['nl']['insanity_score'] = (cells[7].text.rstrip('%') if '-' != cells[7].text else None)
+
+        yield video
+        # import pdb; pdb.set_trace()
+
+
+def main():
+    database = nldb.NlDatabase(auto_commit=True)
+    database.init_scheema_once()
+
+    with database as cursor:
+        for video in gen_data():
+            videos_nl = video['nl']
+            videos_nl['youtube_id'] = video['youtube_id']
+            del video['nl']
+
+            cursor.execute(
+                (
+                    'INSERT OR REPLACE '
+                    'INTO `videos` ({columns}) '
+                    'VALUES ({values}) '
+                ).format(
+                    columns=', '.join([
+                        '`{}`'.format(key) for key in video.keys()
+                    ]),
+                    values=', '.join(['?'] * len(video)),
+                ),
+                video.values()
+            )
+            cursor.execute(
+                (
+                    'INSERT OR REPLACE '
+                    'INTO `videos_nl` ({columns}) '
+                    'VALUES ({values}) '
+                ).format(
+                    columns=', '.join([
+                        '`{}`'.format(key) for key in videos_nl.keys()
+                    ]),
+                    values=', '.join(['?'] * len(videos_nl)),
+                ),
+                videos_nl.values()
+            )
+
+            # import pdb; pdb.set_trace()
+
+if __name__ == '__main__':
+    main()
