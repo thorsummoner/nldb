@@ -1,81 +1,75 @@
 #!/usr/bin/env python
+from __future__ import print_function
 
-import multiprocessing
-import sys
 import collections
 import sqlite3
+import sys
+import textwrap
 
 import nldb
-
-THREADS = 8
-GLOBALLOCK = multiprocessing.Lock()
-
-
-def cc_words_rank(args):
-    database, youtube_id, text = args
-    words = text\
-        .replace(',', '') \
-        .replace('.', '') \
-        .split()
-    words.sort()
-    words_count = collections.defaultdict(int)
-    for word in words:
-        words_count[word] += 1
-
-    for word, count in words_count.iteritems():
-        with database as cursor:
-            GLOBALLOCK.acquire()
-            try:
-                cursor.execute(
-                    (
-                        'INSERT INTO word_rank '
-                        '(word, occurances) '
-                        'VALUES(?, 0) '
-                    ),
-                    [word]
-                )
-            except sqlite3.IntegrityError as err:
-                pass
-            cursor.execute(
-                (
-                    'UPDATE word_rank '
-                    'SET occurances = occurances + ? '
-                    'WHERE word=? '
-                ),
-                (count, word)
-            )
-            GLOBALLOCK.release()
 
 def main():
     database = nldb.NlDatabase(auto_commit=True)
 
     with database as cursor:
-        already_cc = [i[0] for i in cursor.execute(
-            'SELECT youtube_id FROM videos_caption'
-        )]
-        func_args = [
-            (database, i[0], i[1])
-            for i in cursor.execute((
-                'SELECT youtube_id, plaintext '
-                'FROM videos_caption '
-                'WHERE nocaption is null '
-            ))
-        ]
-    assert(func_args is not None)
+        entries = list(cursor.execute(textwrap.dedent('''\
+            SELECT youtube_id, plaintext
+            FROM videos_caption
+            WHERE has_caption
+            AND word_rank_processed is null
+        ''')))
+        progress_total = len(entries)
+        progress_i = 0
 
-    # for entry in func_args:
-    #     cc_words_rank(entry)
+        for youtube_id, plaintext in entries:
+            progress_i += 1
 
-    pool = multiprocessing.Pool(THREADS)
-    try:
-        # Spawn up to 9999999 jobs, I think this is the maximum possible.
-        # I do not know what happens if you exceed this.
-        pool.map_async(cc_words_rank, func_args).get(9999999)
-    except KeyboardInterrupt:
-        # Allow ^C to interrupt from any thread.
-        sys.stdout.write('\033[0m')
-        sys.stdout.write('User Interupt\n')
-    pool.close()
+            words = plaintext\
+                .replace(',', '') \
+                .replace('.', '') \
+                .split()
+            words.sort()
+            words_count = collections.defaultdict(int)
+            for word in words:
+                words_count[word] += 1
+
+            for word, count in words_count.iteritems():
+                update = textwrap.dedent('''\
+                    UPDATE word_rank
+                    SET occurances = occurances + ?
+                    WHERE word=?
+                ''')
+                cur = cursor.execute(update, (count, word))
+                if 0 == cur.rowcount:
+                    cursor.execute(
+                        textwrap.dedent('''\
+                            INSERT INTO word_rank
+                            (word, occurances)
+                            VALUES(?, 0)
+                        '''),
+                        [word]
+                    )
+                    cur = cursor.execute(update, (count, word))
+                cur = cursor.execute(update, (count, word))
+                assert(cur.rowcount > 0)
+
+            cursor.execute(
+                textwrap.dedent('''\
+                    UPDATE videos_caption
+                    SET word_rank_processed = 1
+                    WHERE youtube_id = ?
+                '''),
+                [youtube_id]
+            )
+            cursor.connection.commit()
+            sys.stdout.write(
+                '\r {} / {} ({:.2f} %)'.format(
+                    progress_i,
+                    progress_total,
+                    float(progress_i) / progress_total * 100,
+                )
+            )
+            sys.stdout.flush()
 
 if __name__ == '__main__':
     main()

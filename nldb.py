@@ -30,10 +30,11 @@ class NlDatabase(object):
             ('power_score',     'NUMERIC'),
         ]),
         'videos_caption': collections.OrderedDict([
-            ('youtube_id',      'TEXT PRIMARY KEY'),
-            ('nocaption',       'BOOL'),
-            ('ttml',            'TEXT'),
-            ('plaintext',       'TEXT'),
+            ('youtube_id',          'TEXT PRIMARY KEY'),
+            ('has_caption',         'BOOL'),
+            ('ttml',                'TEXT'),
+            ('plaintext',           'TEXT'),
+            ('word_rank_processed', 'BOOL'),
         ]),
         'word_rank': collections.OrderedDict([
             ('word',            'TEXT PRIMARY KEY'),
